@@ -5,16 +5,25 @@ import plotly.express as px
 import pandas as pd
 import numpy as np
 from datetime import date, timedelta, datetime
-import google.generativeai as genai # 💡 구글 AI 라이브러리 추가
+import google.generativeai as genai
 
 # 1. 페이지 기본 설정
 st.set_page_config(page_title="Pro Quant Dashboard", layout="wide")
 
-# 사이드바 설정
+# ---------------------------------------------------------
+# ⚙️ 사이드바 설정 (슬라이더 추가!)
+# ---------------------------------------------------------
 st.sidebar.header("⚙️ 포트폴리오 설정")
 tickers = st.sidebar.multiselect("분석할 종목", ["QQQ", "SPY", "NVDA", "AAPL", "BTC-USD", "ETH-USD"], default=["QQQ", "BTC-USD"])
 start_date = st.sidebar.date_input("시작일", date.today() - timedelta(days=365))
 end_date = st.sidebar.date_input("종료일", date.today())
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📈 백테스트 파라미터")
+st.sidebar.markdown("5번 탭의 이동평균선 전략 날짜를 직접 조절해 보세요.")
+# 💡 유저가 드래그할 수 있는 슬라이더 생성
+short_ma = st.sidebar.slider("단기 이평선 (일)", min_value=5, max_value=50, value=20, step=1)
+long_ma = st.sidebar.slider("장기 이평선 (일)", min_value=50, max_value=200, value=50, step=1)
 
 @st.cache_data
 def get_data(tickers, start, end):
@@ -77,7 +86,7 @@ with tab3:
     daily_returns = df[target_ticker].pct_change().dropna()
     mu = daily_returns.mean()
     sigma = daily_returns.std()
-    last_price = df[target_ticker].iloc[-1]
+    last_price = df[target_ticker].dropna().iloc[-1]
     
     simulation_df = pd.DataFrame()
     for x in range(num_simulations):
@@ -96,39 +105,22 @@ with tab3:
     fig_mc.update_layout(showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 가격($)", height=500)
     st.plotly_chart(fig_mc, use_container_width=True)
 
-# ---------------------------------------------------------
-# 📰 [업그레이드된 탭 4] 실시간 시장 뉴스 + AI 요약 에이전트
-# ---------------------------------------------------------
 with tab4:
     st.subheader("📡 타겟 종목 실시간 글로벌 뉴스 & AI 요약")
     news_target = st.selectbox("뉴스 검색 종목 선택", tickers, key='news_selectbox')
     news_data = yf.Ticker(news_target).news
     
     if news_data:
-        # 💡 [핵심] AI 요약 버튼 추가
         if st.button(f"✨ '{news_target}' 최신 영문 뉴스 AI 3줄 요약하기"):
             with st.spinner("월스트리트 AI 애널리스트가 기사들을 분석 중입니다..."):
                 try:
-                    # API 키 불러오기 (비밀 금고에서)
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     
-                    # 뉴스 헤드라인들을 텍스트로 하나로 묶기
                     news_titles = "\n".join([article.get('title') or article.get('content', {}).get('title') or "" for article in news_data[:5]])
+                    prompt = f"너는 월스트리트의 전문 퀀트 애널리스트야. 다음은 오늘 '{news_target}' 종목에 대한 최신 영문 뉴스 헤드라인들이야.\n\n{news_titles}\n\n이 뉴스들의 전반적인 맥락을 분석해서, 현재 이 종목의 시장 분위기와 핵심 호재/악재를 일반 투자자가 이해하기 쉽게 한국어로 딱 3개 불릿 포인트(•)로 요약해줘."
                     
-                    # AI에게 내릴 프롬프트(명령어) 작성
-                    prompt = f"""
-                    너는 월스트리트의 전문 퀀트 애널리스트야. 다음은 오늘 '{news_target}' 종목에 대한 최신 영문 뉴스 헤드라인들이야.
-                    
-                    {news_titles}
-                    
-                    이 뉴스들의 전반적인 맥락을 분석해서, 현재 이 종목의 시장 분위기와 핵심 호재/악재를 일반 투자자가 이해하기 쉽게 한국어로 딱 3개 불릿 포인트(•)로 요약해줘.
-                    """
-                    
-                    # AI에게 질문 던지고 답변 받기
                     response = model.generate_content(prompt)
-                    
-                    # 결과 예쁘게 출력
                     st.success("🤖 **AI 애널리스트 브리핑 완료**")
                     st.write(response.text)
                 except Exception as e:
@@ -136,7 +128,6 @@ with tab4:
                     
         st.markdown("---")
         
-        # 기존 뉴스 원문 리스트 출력
         for article in news_data[:5]: 
             title = article.get('title') or article.get('content', {}).get('title') or "제목 없음"
             publisher = article.get('publisher') or article.get('content', {}).get('provider', {}).get('displayName') or "출처 알 수 없음"
@@ -162,18 +153,29 @@ with tab4:
     else:
         st.info("현재 해당 종목에 대한 최신 뉴스 데이터가 수집되지 않았습니다.")
 
+# ---------------------------------------------------------
+# 🎯 [업그레이드된 탭 5] 다이내믹 파라미터 연동
+# ---------------------------------------------------------
 with tab5:
-    st.subheader("📊 20일 / 50일 이동평균선 교차 전략 검증")
+    st.subheader(f"📊 {short_ma}일 / {long_ma}일 이동평균선 교차 전략 검증")
+    st.markdown(f"단기 평선({short_ma}일)이 장기 평선({long_ma}일)을 위로 뚫을 때 **매수**, 아래로 뚫을 때 **현금화**하는 전략입니다. (좌측 사이드바에서 날짜 조절 가능)")
+    
     bt_target = st.selectbox("백테스트 대상 종목 선택", tickers, key='bt_selectbox')
+    
     bt_df = pd.DataFrame(df[bt_target]).dropna()
     bt_df.columns = ['Close']
-    bt_df['SMA_20'] = bt_df['Close'].rolling(window=20).mean()
-    bt_df['SMA_50'] = bt_df['Close'].rolling(window=50).mean()
+    
+    # 💡 하드코딩된 20/50 대신 사이드바에서 받아온 short_ma / long_ma 변수를 사용합니다.
+    bt_df['SMA_Short'] = bt_df['Close'].rolling(window=short_ma).mean()
+    bt_df['SMA_Long'] = bt_df['Close'].rolling(window=long_ma).mean()
     bt_df = bt_df.dropna()
-    bt_df['Signal'] = np.where(bt_df['SMA_20'] > bt_df['SMA_50'], 1, 0)
+    
+    bt_df['Signal'] = np.where(bt_df['SMA_Short'] > bt_df['SMA_Long'], 1, 0)
     bt_df['Position'] = bt_df['Signal'].shift(1).fillna(0)
+    
     bt_df['Asset_Return'] = bt_df['Close'].pct_change().fillna(0) 
     bt_df['Strategy_Return'] = bt_df['Asset_Return'] * bt_df['Position'] 
+    
     bt_df['Cum_Asset_Return'] = (1 + bt_df['Asset_Return']).cumprod() - 1
     bt_df['Cum_Strategy_Return'] = (1 + bt_df['Strategy_Return']).cumprod() - 1
     
@@ -185,14 +187,16 @@ with tab5:
     
     fig_price = go.Figure()
     fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Close'], mode='lines', name='실제 주가', line=dict(color='lightgray', width=1)))
-    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_20'], mode='lines', name='20일 이동평균 (단기)', line=dict(color='blue', width=1.5)))
-    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_50'], mode='lines', name='50일 이동평균 (장기)', line=dict(color='orange', width=1.5)))
+    # 💡 범례 이름도 변수값에 따라 자동으로 바뀌도록 설정
+    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_Short'], mode='lines', name=f'{short_ma}일 이동평균 (단기)', line=dict(color='blue', width=1.5)))
+    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_Long'], mode='lines', name=f'{long_ma}일 이동평균 (장기)', line=dict(color='orange', width=1.5)))
     fig_price.update_layout(title=f"🔍 {bt_target} 주가 및 이동평균선 흐름", xaxis_title="날짜", yaxis_title="가격 ($)", height=400)
     st.plotly_chart(fig_price, use_container_width=True)
     
     final_asset_ret = bt_df['Cum_Asset_Return'].iloc[-1] * 100
     final_strat_ret = bt_df['Cum_Strategy_Return'].iloc[-1] * 100
     alpha = final_strat_ret - final_asset_ret 
+    
     st.markdown("### 🏆 백테스트 최종 성과 지표")
     score_col1, score_col2, score_col3 = st.columns(3)
     with score_col1:
