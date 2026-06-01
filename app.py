@@ -193,7 +193,7 @@ with tab4:
             with st.spinner("월스트리트 AI 애널리스트가 기사들을 분석 중입니다..."):
                 try:
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = genai.GenerativeModel('gemini-flash-latest')
                     
                     news_titles = "\n".join([article.get('title') or article.get('content', {}).get('title') or "" for article in news_data[:5]])
                     prompt = f"너는 월스트리트의 전문 퀀트 애널리스트야. 다음은 오늘 '{news_target_display}' 종목에 대한 최신 영문 뉴스 헤드라인들이야.\n\n{news_titles}\n\n이 뉴스들의 전반적인 맥락을 분석해서, 현재 이 종목의 시장 분위기와 핵심 호재/악재를 일반 투자자가 이해하기 쉽게 한국어로 딱 3개 불릿 포인트(•)로 요약해줘."
