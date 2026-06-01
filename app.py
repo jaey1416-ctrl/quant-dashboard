@@ -152,29 +152,36 @@ with tab5:
     # 3. 거래 시그널 생성 (1: 매수 유지, 0: 현금 보유)
     bt_df['Signal'] = np.where(bt_df['SMA_20'] > bt_df['SMA_50'], 1, 0)
     
-    # 💡 중요: 오늘 시그널이 뜨면 '내일 종가'부터 수익률이 반영되어야 하므로 한 칸 미룹니다(Shift).
+    # 시그널 발생 다음 날 포지션 반영 (Shift)
     bt_df['Position'] = bt_df['Signal'].shift(1).fillna(0)
     
     # 4. 수익률 계산
-    bt_df['Asset_Return'] = bt_df['Close'].pct_change().fillna(0) # 기초 자산 일일 수익률
-    bt_df['Strategy_Return'] = bt_df['Asset_Return'] * bt_df['Position'] # 전략 일일 수익률
+    bt_df['Asset_Return'] = bt_df['Close'].pct_change().fillna(0) 
+    bt_df['Strategy_Return'] = bt_df['Asset_Return'] * bt_df['Position'] 
     
     # 5. 복리 기준 누적 수익률 계산
     bt_df['Cum_Asset_Return'] = (1 + bt_df['Asset_Return']).cumprod() - 1
     bt_df['Cum_Strategy_Return'] = (1 + bt_df['Strategy_Return']).cumprod() - 1
     
-    # 6. 성과 비교 차트 시각화
+    # 6. 성과 비교 차트 시각화 (결과)
     fig_bt = go.Figure()
     fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Cum_Asset_Return'] * 100, mode='lines', name='단순 보유 (Buy & Hold)', line=dict(color='gray', width=1.5)))
     fig_bt.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Cum_Strategy_Return'] * 100, mode='lines', name='이평선 교차 전략 (Strategy)', line=dict(color='green', width=2.5)))
-    
-    fig_bt.update_layout(title=f"📈 {bt_target} 전략 vs 단순 보유 누적 수익률 비교", xaxis_title="날짜", yaxis_title="누적 수익률 (%)", height=500)
+    fig_bt.update_layout(title=f"📈 {bt_target} 누적 수익률 비교", xaxis_title="날짜", yaxis_title="누적 수익률 (%)", height=400)
     st.plotly_chart(fig_bt, use_container_width=True)
     
-    # 7. 성과 지표 요약 스코어보드
+    # 💡 7. 실제 주가 및 이평선 흐름 차트 시각화 (원인 분석용 추가 차트!)
+    fig_price = go.Figure()
+    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Close'], mode='lines', name='실제 주가', line=dict(color='lightgray', width=1)))
+    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_20'], mode='lines', name='20일 이동평균 (단기)', line=dict(color='blue', width=1.5)))
+    fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_50'], mode='lines', name='50일 이동평균 (장기)', line=dict(color='orange', width=1.5)))
+    fig_price.update_layout(title=f"🔍 {bt_target} 주가 및 이동평균선 흐름", xaxis_title="날짜", yaxis_title="가격 ($)", height=400)
+    st.plotly_chart(fig_price, use_container_width=True)
+    
+    # 8. 성과 지표 요약 스코어보드
     final_asset_ret = bt_df['Cum_Asset_Return'].iloc[-1] * 100
     final_strat_ret = bt_df['Cum_Strategy_Return'].iloc[-1] * 100
-    alpha = final_strat_ret - final_asset_ret # 시장 대비 초과 수익률
+    alpha = final_strat_ret - final_asset_ret 
     
     st.markdown("### 🏆 백테스트 최종 성과 지표")
     score_col1, score_col2, score_col3 = st.columns(3)
