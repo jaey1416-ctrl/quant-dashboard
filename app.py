@@ -8,26 +8,54 @@ import numpy as np
 from datetime import date, timedelta, datetime
 import google.generativeai as genai
 
-# 1. 페이지 기본 설정
 st.set_page_config(page_title="Pro Quant Dashboard", layout="wide")
 
 # ---------------------------------------------------------
-# ⚙️ 사이드바 설정
+# 💡 [핵심] 한글 이름 매핑 딕셔너리 (UI 디테일 업그레이드)
 # ---------------------------------------------------------
+TICKER_MAP = {
+    "QQQ": "QQQ (나스닥 기술주)",
+    "SPY": "SPY (S&P 500)",
+    "NVDA": "엔비디아 (NVDA)",
+    "AAPL": "애플 (AAPL)",
+    "BTC-USD": "비트코인 (BTC)",
+    "ETH-USD": "이더리움 (ETH)",
+    "005930.KS": "삼성전자",
+    "000660.KS": "SK하이닉스"
+}
+
+# ⚙️ 사이드바 설정
 st.sidebar.header("⚙️ 포트폴리오 설정")
-tickers = st.sidebar.multiselect("분석할 종목", ["QQQ", "SPY", "NVDA", "AAPL", "BTC-USD", "ETH-USD"], default=["QQQ", "BTC-USD"])
+
+# 유저에게는 예쁜 한글(value)을 보여주고, 코드 내부적으로는 진짜 티커(key)를 씁니다.
+raw_tickers = st.sidebar.multiselect(
+    "분석할 종목", 
+    options=list(TICKER_MAP.keys()), 
+    default=["QQQ", "005930.KS"],
+    format_func=lambda x: TICKER_MAP[x]
+)
+
 start_date = st.sidebar.date_input("시작일", date.today() - timedelta(days=365))
 end_date = st.sidebar.date_input("종료일", date.today())
 
-@st.cache_data
-def get_data(tickers, start, end):
-    return yf.download(tickers, start=start, end=end)['Close']
-
-if not tickers:
+if not raw_tickers:
     st.warning("종목을 선택해 주세요!")
     st.stop()
 
-df = get_data(tickers, start_date, end_date)
+# 대시보드 전체에서 쓰일 한글 이름 리스트 생성
+display_tickers = [TICKER_MAP[t] for t in raw_tickers]
+
+@st.cache_data
+def get_data(tickers, start, end):
+    data = yf.download(tickers, start=start, end=end)['Close']
+    # 1개 종목만 선택했을 때 데이터 구조가 깨지는 것 방지
+    if isinstance(data, pd.Series):
+        data = pd.DataFrame(data, columns=[tickers[0]])
+    return data
+
+df = get_data(raw_tickers, start_date, end_date)
+# 다운로드한 데이터프레임의 영어 열(Column) 이름을 모두 한글로 교체!
+df.rename(columns=TICKER_MAP, inplace=True)
 
 # ---------------------------------------------------------
 # 상단 KPI 요약 패널
@@ -35,21 +63,21 @@ df = get_data(tickers, start_date, end_date)
 st.title("⚡ Pro 퀀트 통합 대시보드")
 st.markdown("---")
 
-cols = st.columns(len(tickers)) 
-for i, ticker in enumerate(tickers):
+cols = st.columns(len(display_tickers)) 
+for i, ticker in enumerate(display_tickers):
     with cols[i]:
         valid_data = df[ticker].dropna()
         if len(valid_data) >= 2:
             latest_price = valid_data.iloc[-1]
             prev_price = valid_data.iloc[-2]
             change_pct = ((latest_price - prev_price) / prev_price) * 100
-            st.metric(label=f"💰 {ticker} 현재가", value=f"${latest_price:,.2f}", delta=f"{change_pct:.2f}%")
+            # 한국 주식은 소수점이 없으므로 통화 단위를 섞어서 표기
+            st.metric(label=f"💰 {ticker} 현재가", value=f"{latest_price:,.2f}", delta=f"{change_pct:.2f}%")
         else:
             st.metric(label=f"💰 {ticker} 현재가", value="데이터 대기 중", delta="-")
 
 st.markdown("---")
 
-# 5개의 분석 탭 구성
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 과거 가격 흐름", 
     "🔥 자산 상관관계", 
@@ -58,7 +86,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🎯 백테스트 리포트"
 ])
 
-# [탭 1: 과거 가격 흐름]
 with tab1:
     st.subheader("📊 선택 자산의 장기 주가 추세")
     chart_mode = st.radio(
@@ -68,11 +95,11 @@ with tab1:
     )
     if chart_mode == "1. 종목별 개별 차트 분리 (권장)":
         st.info("💡 **가이드:** 각 자산의 고유한 가격 변동성을 왜곡 없이 볼 수 있도록 분리된 차트를 제공합니다.")
-        fig_1 = make_subplots(rows=len(tickers), cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=tickers)
-        for i, ticker in enumerate(tickers):
+        fig_1 = make_subplots(rows=len(display_tickers), cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=display_tickers)
+        for i, ticker in enumerate(display_tickers):
             fig_1.add_trace(go.Scatter(x=df.index, y=df[ticker], name=ticker), row=i+1, col=1)
         fig_1.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-        fig_1.update_layout(height=300 * len(tickers), showlegend=False)
+        fig_1.update_layout(height=300 * len(display_tickers), showlegend=False)
         st.plotly_chart(fig_1, use_container_width=True)
     elif chart_mode == "2. 정규화 수익률 비교 (출발선 0% 통일)":
         st.info("💡 **가이드:** 모든 자산의 첫날을 0%로 맞추어, 동일 기간 동안 어떤 자산이 가장 높은 수익률(%)을 기록했는지 공정하게 겨룹니다.")
@@ -83,16 +110,15 @@ with tab1:
         fig_2.update_layout(height=500)
         st.plotly_chart(fig_2, use_container_width=True)
     else:
-        st.info("💡 **가이드:** 자산들의 실제 가격($)을 그대로 겹쳐서 보여줍니다. 가격 체급이 다르면 변동성이 묻힐 수 있습니다.")
-        fig_3 = px.line(df, labels={'value': '원본 가격 ($)', 'Date': '날짜'})
+        st.info("💡 **가이드:** 자산들의 실제 가격(또는 원화)을 그대로 겹쳐서 보여줍니다. 체급이 다르면 차트가 왜곡됩니다.")
+        fig_3 = px.line(df, labels={'value': '원본 가격', 'Date': '날짜'})
         fig_3.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
         fig_3.update_layout(height=500)
         st.plotly_chart(fig_3, use_container_width=True)
 
-# [탭 2: 자산 상관관계]
 with tab2:
     st.subheader("🧬 포트폴리오 자산 간 상관관계 분석")
-    if len(tickers) >= 2:
+    if len(display_tickers) >= 2:
         st.info("💡 **차트 해석 가이드:** 붉은색(+1)에 가까울수록 똑같이 움직이고, 푸른색(-1)에 가까울수록 반대로 움직여 위험 방어(헤징) 효과가 큽니다.")
         corr_matrix = df.pct_change().dropna().corr()
         fig_corr = px.imshow(corr_matrix, text_auto=True, color_continuous_scale='RdBu_r', zmin=-1, zmax=1)
@@ -100,20 +126,16 @@ with tab2:
     else:
         st.info("상관관계 매트릭스를 확인하려면 좌측 사이드바에서 종목을 2개 이상 선택해 주세요.")
 
-# ---------------------------------------------------------
-# 🎲 [업그레이드 완료] 3번 몬테카를로 시뮬레이션 탭
-# ---------------------------------------------------------
 with tab3:
     st.subheader("🎲 미래 30일 주가 경로 및 자산 시뮬레이션")
-    target_ticker = st.selectbox("시뮬레이션 타겟 종목", tickers)
+    target_ticker = st.selectbox("시뮬레이션 타겟 종목", display_tickers)
     
-    # 💡 [새로운 기능] 유저가 가상으로 투자할 금액 입력 칸 레이아웃 배치
-    init_investment = st.number_input(f"💵 '{target_ticker}'에 투자할 금액을 입력하세요 ($)", min_value=10, value=1000, step=100)
+    init_investment = st.number_input(f"💵 '{target_ticker}'에 투자할 금액을 입력하세요 (달러/원화)", min_value=10, value=1000, step=100)
     
     st.info(f"""
     💡 **차트 해석 가이드:**
     1. **상단 차트 (주가 추세 예측):** 과거 1년 통계를 바탕으로 미래 30일 동안 주가가 움직일 수 있는 확률적 범위를 보여줍니다.
-    2. **하단 차트 (내 자산 가치 변화):** 입력하신 초기 투자금 **${init_investment:,.2f}**이 주가 파동에 따라 30일 뒤 최종적으로 얼마까지 불어나거나 줄어들 수 있는지 가치 변화 경로를 100번 시뮬레이션한 결과입니다.
+    2. **하단 차트 (내 자산 가치 변화):** 입력하신 초기 투자금 **{init_investment:,.2f}**이 주가 파동에 따라 30일 뒤 최종적으로 얼마까지 불어나거나 줄어들 수 있는지 가치 변화 경로를 100번 시뮬레이션한 결과입니다.
     """)
     
     daily_returns = df[target_ticker].pct_change().dropna()
@@ -124,9 +146,8 @@ with tab3:
     days_to_simulate = 30
     num_simulations = 100
     
-    # 두 가지 결과를 담을 데이터프레임 초기화
-    price_sim_df = pd.DataFrame()      # 주가 시뮬레이션 데이터
-    asset_sim_df = pd.DataFrame()      # 자산 가치 시뮬레이션 데이터
+    price_sim_df = pd.DataFrame()     
+    asset_sim_df = pd.DataFrame()      
     
     for x in range(num_simulations):
         price_series = [last_price]
@@ -135,49 +156,47 @@ with tab3:
             price_series.append(next_price)
             
         price_sim_df[f"Sim_{x}"] = price_series
-        # 💡 [핵심 공식] (예측 주가 변동률) * 초기 투자금 = 미래 자산 가치 변화 경로 계산
         asset_sim_df[f"Sim_{x}"] = (np.array(price_series) / last_price) * init_investment
         
-    # 1. 기존 주가 시뮬레이션 차트
     fig_mc = go.Figure()
     for col in price_sim_df.columns:
         fig_mc.add_trace(go.Scatter(x=np.arange(days_to_simulate+1), y=price_sim_df[col], 
                                     mode='lines', line=dict(color='gray', width=1), opacity=0.2))
         
     fig_mc.add_hline(y=last_price, line_dash="dash", line_color="red", annotation_text="현재가")
-    fig_mc.update_layout(title=f"📈 {target_ticker} 미래 주가 시나리오 예측 (100회)", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 주가 ($)", height=400)
+    fig_mc.update_layout(title=f"📈 {target_ticker} 미래 주가 시나리오 예측 (100회)", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 주가", height=400)
     st.plotly_chart(fig_mc, use_container_width=True)
     
     st.markdown("---")
     
-    # 💡 2. [새로운 차트] 투자 자산 가치 변화 시뮬레이션 차트 출력
     fig_asset = go.Figure()
     for col in asset_sim_df.columns:
-        # 자산 차트는 시각적 구분을 위해 예쁜 청록색(cyan) 계열 선으로 드로잉
         fig_asset.add_trace(go.Scatter(x=np.arange(days_to_simulate+1), y=asset_sim_df[col], 
                                        mode='lines', line=dict(color='darkturquoise', width=1), opacity=0.15))
         
     fig_asset.add_hline(y=init_investment, line_dash="dash", line_color="red", annotation_text="초기 투자 원금")
-    fig_asset.update_layout(title=f"💰 주가 변동에 따른 투자 자산 가치 추전 시나리오 (원금: ${init_investment:,.2f})", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 자산 가치 ($)", height=400)
+    fig_asset.update_layout(title=f"💰 주가 변동에 따른 투자 자산 가치 추정 시나리오 (원금: {init_investment:,.2f})", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 자산 가치", height=400)
     st.plotly_chart(fig_asset, use_container_width=True)
 
-# [탭 4: 실시간 시장 뉴스 & AI 요약]
 with tab4:
     st.subheader("📡 타겟 종목 실시간 글로벌 뉴스 & AI 요약")
     st.info("💡 **기능 가이드:** 아래 버튼을 누르면 AI 애널리스트가 영문 뉴스들을 읽고 시장 분위기를 한국어 3줄로 즉시 요약해 줍니다.")
     
-    news_target = st.selectbox("뉴스 검색 종목 선택", tickers, key='news_selectbox')
-    news_data = yf.Ticker(news_target).news
+    news_target_display = st.selectbox("뉴스 검색 종목 선택", display_tickers, key='news_selectbox')
+    
+    # 디스플레이용 한글 이름을 다시 야후 파이낸스용 영어 티커로 변환하여 뉴스 검색
+    news_target_raw = [k for k, v in TICKER_MAP.items() if v == news_target_display][0]
+    news_data = yf.Ticker(news_target_raw).news
     
     if news_data:
-        if st.button(f"✨ '{news_target}' 최신 영문 뉴스 AI 3줄 요약하기"):
+        if st.button(f"✨ '{news_target_display}' 최신 영문 뉴스 AI 3줄 요약하기"):
             with st.spinner("월스트리트 AI 애널리스트가 기사들을 분석 중입니다..."):
                 try:
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
                     news_titles = "\n".join([article.get('title') or article.get('content', {}).get('title') or "" for article in news_data[:5]])
-                    prompt = f"너는 월스트리트의 전문 퀀트 애널리스트야. 다음은 오늘 '{news_target}' 종목에 대한 최신 영문 뉴스 헤드라인들이야.\n\n{news_titles}\n\n이 뉴스들의 전반적인 맥락을 분석해서, 현재 이 종목의 시장 분위기와 핵심 호재/악재를 일반 투자자가 이해하기 쉽게 한국어로 딱 3개 불릿 포인트(•)로 요약해줘."
+                    prompt = f"너는 월스트리트의 전문 퀀트 애널리스트야. 다음은 오늘 '{news_target_display}' 종목에 대한 최신 영문 뉴스 헤드라인들이야.\n\n{news_titles}\n\n이 뉴스들의 전반적인 맥락을 분석해서, 현재 이 종목의 시장 분위기와 핵심 호재/악재를 일반 투자자가 이해하기 쉽게 한국어로 딱 3개 불릿 포인트(•)로 요약해줘."
                     
                     response = model.generate_content(prompt)
                     st.success("🤖 **AI 애널리스트 브리핑 완료**")
@@ -210,9 +229,8 @@ with tab4:
             st.caption(f"🏢 매체: **{publisher}** | 🕒 발행: {date_str}")
             st.markdown("---")
     else:
-        st.info("현재 해당 종목에 대한 최신 뉴스 데이터가 수집되지 않았습니다.")
+        st.info("현재 해당 종목에 대한 최신 뉴스 데이터가 수집되지 않았습니다. (※ 한국 주식은 야후 파이낸스 영문 뉴스 제공이 제한적일 수 있습니다.)")
 
-# [탭 5: 백테스트 리포트]
 with tab5:
     st.subheader("🎯 이동평균선 크로스오버 백테스트 엔진")
     st.info("""
@@ -261,7 +279,7 @@ with tab5:
     
     st.markdown("---")
     
-    bt_target = st.selectbox("백테스트 대상 종목 선택", tickers, key='bt_selectbox')
+    bt_target = st.selectbox("백테스트 대상 종목 선택", display_tickers, key='bt_selectbox')
     bt_df = pd.DataFrame(df[bt_target]).dropna()
     bt_df.columns = ['Close']
     
@@ -288,7 +306,7 @@ with tab5:
     fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['Close'], mode='lines', name='실제 주가', line=dict(color='lightgray', width=1)))
     fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_Short'], mode='lines', name=f'{short_ma}일 이동평균 (단기)', line=dict(color='blue', width=1.5)))
     fig_price.add_trace(go.Scatter(x=bt_df.index, y=bt_df['SMA_Long'], mode='lines', name=f'{long_ma}일 이동평균 (장기)', line=dict(color='orange', width=1.5)))
-    fig_price.update_layout(title=f"🔍 {bt_target} 주가 및 이동평균선 흐름", xaxis_title="날짜", yaxis_title="가격 ($)", height=400)
+    fig_price.update_layout(title=f"🔍 {bt_target} 주가 및 이동평균선 흐름", xaxis_title="날짜", yaxis_title="가격", height=400)
     st.plotly_chart(fig_price, use_container_width=True)
     
     final_asset_ret = bt_df['Cum_Asset_Return'].iloc[-1] * 100
