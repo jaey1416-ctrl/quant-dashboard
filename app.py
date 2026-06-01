@@ -12,7 +12,7 @@ import google.generativeai as genai
 st.set_page_config(page_title="Pro Quant Dashboard", layout="wide")
 
 # ---------------------------------------------------------
-# ⚙️ 사이드바 설정 (전역 변수만 전량 남김)
+# ⚙️ 사이드바 설정
 # ---------------------------------------------------------
 st.sidebar.header("⚙️ 포트폴리오 설정")
 tickers = st.sidebar.multiselect("분석할 종목", ["QQQ", "SPY", "NVDA", "AAPL", "BTC-USD", "ETH-USD"], default=["QQQ", "BTC-USD"])
@@ -61,13 +61,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # [탭 1: 과거 가격 흐름]
 with tab1:
     st.subheader("📊 선택 자산의 장기 주가 추세")
-    
     chart_mode = st.radio(
         "👁️ 차트 보기 모드 선택",
         options=["1. 종목별 개별 차트 분리 (권장)", "2. 정규화 수익률 비교 (출발선 0% 통일)", "3. 단순 통합 차트 (원본 가격)"],
         horizontal=True
     )
-    
     if chart_mode == "1. 종목별 개별 차트 분리 (권장)":
         st.info("💡 **가이드:** 각 자산의 고유한 가격 변동성을 왜곡 없이 볼 수 있도록 분리된 차트를 제공합니다.")
         fig_1 = make_subplots(rows=len(tickers), cols=1, shared_xaxes=True, vertical_spacing=0.05, subplot_titles=tickers)
@@ -76,7 +74,6 @@ with tab1:
         fig_1.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
         fig_1.update_layout(height=300 * len(tickers), showlegend=False)
         st.plotly_chart(fig_1, use_container_width=True)
-        
     elif chart_mode == "2. 정규화 수익률 비교 (출발선 0% 통일)":
         st.info("💡 **가이드:** 모든 자산의 첫날을 0%로 맞추어, 동일 기간 동안 어떤 자산이 가장 높은 수익률(%)을 기록했는지 공정하게 겨룹니다.")
         clean_df = df.dropna()
@@ -85,7 +82,6 @@ with tab1:
         fig_2.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
         fig_2.update_layout(height=500)
         st.plotly_chart(fig_2, use_container_width=True)
-        
     else:
         st.info("💡 **가이드:** 자산들의 실제 가격($)을 그대로 겹쳐서 보여줍니다. 가격 체급이 다르면 변동성이 묻힐 수 있습니다.")
         fig_3 = px.line(df, labels={'value': '원본 가격 ($)', 'Date': '날짜'})
@@ -104,11 +100,21 @@ with tab2:
     else:
         st.info("상관관계 매트릭스를 확인하려면 좌측 사이드바에서 종목을 2개 이상 선택해 주세요.")
 
-# [탭 3: 몬테카를로 시뮬레이션]
+# ---------------------------------------------------------
+# 🎲 [업그레이드 완료] 3번 몬테카를로 시뮬레이션 탭
+# ---------------------------------------------------------
 with tab3:
-    st.subheader("🎲 미래 30일 주가 경로 시뮬레이션 (Monte Carlo)")
+    st.subheader("🎲 미래 30일 주가 경로 및 자산 시뮬레이션")
     target_ticker = st.selectbox("시뮬레이션 타겟 종목", tickers)
-    st.info("💡 **차트 해석 가이드:** 과거의 평균 수익과 변동성을 바탕으로 미래 30일의 주가 경로를 100번 추첨한 결과입니다. 위아래 폭을 통해 리스크를 가늠하세요.")
+    
+    # 💡 [새로운 기능] 유저가 가상으로 투자할 금액 입력 칸 레이아웃 배치
+    init_investment = st.number_input(f"💵 '{target_ticker}'에 투자할 금액을 입력하세요 ($)", min_value=10, value=1000, step=100)
+    
+    st.info(f"""
+    💡 **차트 해석 가이드:**
+    1. **상단 차트 (주가 추세 예측):** 과거 1년 통계를 바탕으로 미래 30일 동안 주가가 움직일 수 있는 확률적 범위를 보여줍니다.
+    2. **하단 차트 (내 자산 가치 변화):** 입력하신 초기 투자금 **${init_investment:,.2f}**이 주가 파동에 따라 30일 뒤 최종적으로 얼마까지 불어나거나 줄어들 수 있는지 가치 변화 경로를 100번 시뮬레이션한 결과입니다.
+    """)
     
     daily_returns = df[target_ticker].pct_change().dropna()
     mu = daily_returns.mean()
@@ -117,22 +123,43 @@ with tab3:
     
     days_to_simulate = 30
     num_simulations = 100
-    simulation_df = pd.DataFrame()
+    
+    # 두 가지 결과를 담을 데이터프레임 초기화
+    price_sim_df = pd.DataFrame()      # 주가 시뮬레이션 데이터
+    asset_sim_df = pd.DataFrame()      # 자산 가치 시뮬레이션 데이터
+    
     for x in range(num_simulations):
         price_series = [last_price]
         for y in range(days_to_simulate):
             next_price = price_series[-1] * (1 + np.random.normal(mu, sigma))
             price_series.append(next_price)
-        simulation_df[f"Sim_{x}"] = price_series
+            
+        price_sim_df[f"Sim_{x}"] = price_series
+        # 💡 [핵심 공식] (예측 주가 변동률) * 초기 투자금 = 미래 자산 가치 변화 경로 계산
+        asset_sim_df[f"Sim_{x}"] = (np.array(price_series) / last_price) * init_investment
         
+    # 1. 기존 주가 시뮬레이션 차트
     fig_mc = go.Figure()
-    for col in simulation_df.columns:
-        fig_mc.add_trace(go.Scatter(x=np.arange(days_to_simulate+1), y=simulation_df[col], 
+    for col in price_sim_df.columns:
+        fig_mc.add_trace(go.Scatter(x=np.arange(days_to_simulate+1), y=price_sim_df[col], 
                                     mode='lines', line=dict(color='gray', width=1), opacity=0.2))
         
     fig_mc.add_hline(y=last_price, line_dash="dash", line_color="red", annotation_text="현재가")
-    fig_mc.update_layout(showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 가격($)", height=500)
+    fig_mc.update_layout(title=f"📈 {target_ticker} 미래 주가 시나리오 예측 (100회)", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 주가 ($)", height=400)
     st.plotly_chart(fig_mc, use_container_width=True)
+    
+    st.markdown("---")
+    
+    # 💡 2. [새로운 차트] 투자 자산 가치 변화 시뮬레이션 차트 출력
+    fig_asset = go.Figure()
+    for col in asset_sim_df.columns:
+        # 자산 차트는 시각적 구분을 위해 예쁜 청록색(cyan) 계열 선으로 드로잉
+        fig_asset.add_trace(go.Scatter(x=np.arange(days_to_simulate+1), y=asset_sim_df[col], 
+                                       mode='lines', line=dict(color='darkturquoise', width=1), opacity=0.15))
+        
+    fig_asset.add_hline(y=init_investment, line_dash="dash", line_color="red", annotation_text="초기 투자 원금")
+    fig_asset.update_layout(title=f"💰 주가 변동에 따른 투자 자산 가치 추전 시나리오 (원금: ${init_investment:,.2f})", showlegend=False, xaxis_title="미래 경과 일수(Days)", yaxis_title="예측 자산 가치 ($)", height=400)
+    st.plotly_chart(fig_asset, use_container_width=True)
 
 # [탭 4: 실시간 시장 뉴스 & AI 요약]
 with tab4:
@@ -185,31 +212,56 @@ with tab4:
     else:
         st.info("현재 해당 종목에 대한 최신 뉴스 데이터가 수집되지 않았습니다.")
 
-# ---------------------------------------------------------
-# 🎯 [동적 최적화 완료된 탭 5] 백테스트 리포트
-# ---------------------------------------------------------
+# [탭 5: 백테스트 리포트]
 with tab5:
     st.subheader("🎯 이동평균선 크로스오버 백테스트 엔진")
+    st.info("""
+    📚 **이동평균선(MA) 교차 매매를 왜 하고, 무엇을 얻을 수 있나요?**
+    * **사용 이유 (노이즈 제거):** 주가 차트에는 매일 무작위적인 가격 '노이즈(소음)'가 낍니다. 이동평균선은 과거 가격을 평균 내어 이 소음을 걷어내고, 현재 자산이 상승 가도를 달리는지 하락 구렁텅이로 빠지는지 **'진짜 우상향 추세'**를 시각화해 줍니다.
+    * **얻을 수 있는 이득 (자산 보호와 리스크 차단):** 주식 투자에서 가장 무서운 것은 인간의 욕심과 공포입니다. 이 전략은 감정을 배제하고 수학적 선 교차에만 맞춰 **'무릎에서 사고 어깨에서 파는 기계적 규칙'**을 제공합니다. 특히 대공황이나 코로나 폭락 같은 **'대형 하락장(MDD)'이 시작될 때 자산을 전량 현금화하여 내 원금을 안전하게 지켜내는 것**이 이 전략의 가장 압도적인 이득입니다.
+    """)
     
-    # 💡 [핵심 업데이트] 파라미터 제어용 슬라이더를 5번 탭 최상단에 가로 2열 배치!
-    st.markdown("### ⚙️ 전략 변수 조절")
+    st.markdown("### ⚡ 월스트리트 검증 3대 황금 조합 프리셋")
+    st.caption("버튼을 누르면 아래 전략 변수 슬라이더가 해당 조합의 숫자로 자동 세팅됩니다.")
+    
+    if 'short_ma' not in st.session_state: st.session_state['short_ma'] = 20
+    if 'long_ma' not in st.session_state: st.session_state['long_ma'] = 50
+
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
+    with btn_col1:
+        if st.button("🚀 초단기 트레이딩 모드 (5일 / 20일)"):
+            st.session_state['short_ma'] = 5
+            st.session_state['long_ma'] = 20
+            st.rerun()
+    with btn_col2:
+        if st.button("💼 중단기 밸런스 모드 (20일 / 60일)"):
+            st.session_state['short_ma'] = 20
+            st.session_state['long_ma'] = 60
+            st.rerun()
+    with btn_col3:
+        if st.button("🐳 장기 거시경제 모드 (50일 / 200일)"):
+            st.session_state['short_ma'] = 50
+            st.session_state['long_ma'] = 200
+            st.rerun()
+            
+    st.markdown("---")
+    st.markdown("### ⚙️ 전략 변수 미세 조절 및 조합별 성격")
+    
     param_col1, param_col2 = st.columns(2)
     with param_col1:
-        short_ma = st.slider("단기 이동평균선 기준일 (일)", min_value=5, max_value=50, value=20, step=1)
+        short_ma = st.slider("단기 이동평균선 기준일 (일)", min_value=5, max_value=50, key='short_ma', step=1)
     with param_col2:
-        long_ma = st.slider("장기 이동평균선 기준일 (일)", min_value=50, max_value=200, value=50, step=1)
+        long_ma = st.slider("장기 이동평균선 기준일 (일)", min_value=20, max_value=200, key='long_ma', step=1)
+        
+    st.info(f"""
+    🧬 **현재 설정된 조합 ({short_ma}일 / {long_ma}일)의 통계적 성격:**
+    * **짧은 조합 (예: 5/20):** 하락세에 엄청나게 빠르게 반응해 돈을 빼내지만, 주가가 횡보할 때 가짜 신호(휩쏘)에 속아 **사고팔기를 반복하며 수수료만 날리는 리스크**가 있습니다. (비트코인,성장주 등 고변동성 자산에 유리)
+    * **긴 조합 (예: 50/200):** 자잘한 소음은 완벽히 무시하고 굵직한 메인 상승장만 가져갑니다. 다만 대응 속도가 한참 느려서 **폭락이 이미 시작되고 한참 뒤에나 매도 신호가 뜨는 뒷북 리스크**가 있습니다. (지수 ETF나 초장기 가치투자에 유리)
+    """)
     
     st.markdown("---")
     
-    st.markdown(f"### 📊 {short_ma}일 / {long_ma}일 전략 검증 리포트")
-    st.info(f"""
-    💡 **파라미터(날짜) 조작을 통해 얻어야 할 퀀트 인사이트:**
-    * **자산의 성격 파악:** 어떤 종목은 이평선 전략이 기가 막히게 통하고(추세장), 어떤 종목은 샀다 팔았다 수수료만 날립니다(횡보장). 이 자산이 추세를 타는 성격인지 확인하세요.
-    * **가짜 신호(휩쏘)와 대응 속도의 트레이드오프:** 단기/장기 간격을 좁게 하면 하락을 빨리 피하지만 **가짜 신호**에 속아 잦은 손절이 발생합니다. 반대로 간격을 넓게 하면 가짜 신호는 줄지만 **대응이 늦어집니다**. 상단 슬라이더를 움직이며 최적의 조합을 탐색하세요!
-    """)
-    
     bt_target = st.selectbox("백테스트 대상 종목 선택", tickers, key='bt_selectbox')
-    
     bt_df = pd.DataFrame(df[bt_target]).dropna()
     bt_df.columns = ['Close']
     
